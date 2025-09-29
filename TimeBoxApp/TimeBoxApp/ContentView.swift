@@ -10,13 +10,7 @@ import SwiftData
 
 struct ContentView: View {
     @Environment(\.modelContext) private var context
-    @StateObject private var taskManager: TaskManager
     @StateObject private var themeManager = ThemeManager()
-    
-    init() {
-        // We'll set this up properly in onAppear since we need the context
-        self._taskManager = StateObject(wrappedValue: TaskManager(context: ModelContext(ModelContainer.preview)))
-    }
     
     var body: some View {
         TabView {
@@ -32,12 +26,8 @@ struct ContentView: View {
                     Text("Calendar")
                 }
         }
-        .environmentObject(taskManager)
+        .environmentObject(TaskManager(context: context))
         .environmentObject(themeManager)
-        .onAppear {
-            // Update taskManager with the actual context
-            taskManager.updateContext(context)
-        }
     }
 }
 

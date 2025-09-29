@@ -1,0 +1,403 @@
+//
+//  TaskManager.swift
+//  TimeBoxApp
+//
+//  FIXED: Proper task completion toggle and real-time updates
+//
+
+import SwiftUI
+import SwiftData
+
+@MainActor
+class TaskManager: ObservableObject {
+    private var context: ModelContext
+    @Published var tasks: [TaskItem] = []
+    @Published var errorMessage: String?
+    @Published var isLoading = false
+    
+    // Performance: Caching layer
+    private var tasksCache: [TaskItem] = []
+    private var lastCacheUpdate = Date.distantPast
+    private let cacheValidityDuration: TimeInterval = 300
+    private var dailyTasksCache: [String: [TaskItem]] = [:]
+    private let maxCacheSize = 50
+    
+    init(context: ModelContext) {
+        self.context = context
+        loadTasksEfficiently()
+    }
+    
+    private func loadTasksEfficiently() {
+        isLoading = true
+        defer { isLoading = false }
+        
+        do {
+            let now = Date()
+            if now.timeIntervalSince(lastCacheUpdate) < cacheValidityDuration && !tasksCache.isEmpty {
+                tasks = tasksCache
+                return
+            }
+            
+            let descriptor = FetchDescriptor<TaskItem>(sortBy: [SortDescriptor(\.createdDate)])
+            let fetchedTasks = try context.fetch(descriptor)
+            
+            tasksCache = fetchedTasks
+            tasks = fetchedTasks
+            lastCacheUpdate = now
+            dailyTasksCache.removeAll()
+            errorMessage = nil
+        } catch {
+            errorMessage = "Failed to load tasks: \(error.localizedDescription)"
+            tasks = tasksCache
+        }
+    }
+    
+    func addTask(title: String, notes: String = "", scheduledDate: Date? = nil, startTime: Date? = nil, endTime: Date? = nil, taskType: TaskType = .personal) {
+        let cleanTitle = title.trimmingCharacters(in: .whitespaces)
+        
+        guard !cleanTitle.isEmpty else {
+            errorMessage = "Task title cannot be empty"
+            return
+        }
+        
+        guard cleanTitle.count <= 100 else {
+            errorMessage = "Task title cannot exceed 100 characters"
+            return
+        }
+        
+        if let start = startTime, let end = endTime, start >= end {
+            errorMessage = "Start time must be before end time"
+            return
+        }
+        
+        do {
+            let task = TaskItem(
+                title: cleanTitle,
+                notes: notes,
+                scheduledDate: scheduledDate,
+                startTime: startTime,
+                endTime: endTime,
+                taskType: taskType
+            )
+            
+            context.insert(task)
+            try saveContextSafely()
+            
+            // Update caches immediately
+            tasksCache.append(task)
+            tasks.append(task)
+            invalidateDailyCache(for: scheduledDate ?? startTime)
+            errorMessage = nil
+            
+            // Trigger UI update
+            objectWillChange.send()
+        } catch {
+            errorMessage = "Failed to create task: \(error.localizedDescription)"
+        }
+    }
+    
+    func updateTask(_ task: TaskItem) {
+        do {
+            try saveContextSafely()
+            loadTasksEfficiently()
+            objectWillChange.send()
+            errorMessage = nil
+        } catch {
+            errorMessage = "Failed to update task: \(error.localizedDescription)"
+        }
+    }
+    
+    func deleteTask(_ task: TaskItem) {
+        do {
+            context.delete(task)
+            try saveContextSafely()
+            
+            // Update caches immediately
+            tasksCache.removeAll { $0.id == task.id }
+            tasks.removeAll { $0.id == task.id }
+            invalidateDailyCache(for: task.scheduledDate ?? task.startTime)
+            errorMessage = nil
+            
+            // Trigger UI update
+            objectWillChange.send()
+        } catch {
+            errorMessage = "Failed to delete task: \(error.localizedDescription)"
+        }
+    }
+    
+    // FIXED: Proper task completion toggle
+    func toggleTaskCompletion(_ task: TaskItem) {
+        // Toggle the completion state
+        task.isCompleted.toggle()
+        
+        do {
+            // Save to database
+            try saveContextSafely()
+            
+            // Clear caches to force refresh
+            dailyTasksCache.removeAll()
+            
+            // Trigger immediate UI update
+            objectWillChange.send()
+            
+            errorMessage = nil
+        } catch {
+            // Revert the change if save failed
+            task.isCompleted.toggle()
+            errorMessage = "Failed to update task completion: \(error.localizedDescription)"
+        }
+    }
+    
+    private func saveContextSafely() throws {
+        do {
+            try context.save()
+        } catch {
+            print("Context save error: \(error)")
+            throw error
+        }
+    }
+    
+    func clearError() {
+        errorMessage = nil
+    }
+    
+    // FIXED: Separate methods for completed and incomplete tasks
+    func getCompletedTasks() -> [TaskItem] {
+        return tasks.filter { $0.isCompleted }.sorted { $0.createdDate > $1.createdDate }
+    }
+    
+    func getIncompleteTasks() -> [TaskItem] {
+        return tasks.filter { !$0.isCompleted }.sorted { $0.createdDate < $1.createdDate }
+    }
+    
+    func getTasksForDate(_ date: Date) -> [TaskItem] {
+        let cacheKey = dateFormatter.string(from: date)
+        
+        if let cachedTasks = dailyTasksCache[cacheKey] {
+            return cachedTasks
+        }
+        
+        let calendar = Calendar.current
+        let dayTasks = tasks.filter { task in
+            if let scheduledDate = task.scheduledDate, calendar.isDate(scheduledDate, inSameDayAs: date) {
+                return true
+            }
+            if let startTime = task.startTime, calendar.isDate(startTime, inSameDayAs: date) {
+                return true
+            }
+            return false
+        }.sorted { task1, task2 in
+            if let start1 = task1.startTime, let start2 = task2.startTime {
+                return start1 < start2
+            }
+            return task1.createdDate < task2.createdDate
+        }
+        
+        if dailyTasksCache.count >= maxCacheSize {
+            let oldestKey = dailyTasksCache.keys.sorted().first
+            if let key = oldestKey {
+                dailyTasksCache.removeValue(forKey: key)
+            }
+        }
+        
+        dailyTasksCache[cacheKey] = dayTasks
+        return dayTasks
+    }
+    
+    func getTodaysTasks() -> [TaskItem] {
+        return getTasksForDate(Date())
+    }
+    
+    func getAllTasks() -> [TaskItem] {
+        return tasks.sorted { $0.createdDate < $1.createdDate }
+    }
+    
+    func getUnscheduledTasks() -> [TaskItem] {
+        return tasks.filter { task in
+            task.scheduledDate == nil && task.startTime == nil
+        }.sorted { $0.createdDate < $1.createdDate }
+    }
+    
+    func getTasksForTimeSlot(date: Date, hour: Int) -> [TaskItem] {
+        let calendar = Calendar.current
+        return getTasksForDate(date).filter { task in
+            guard let startTime = task.startTime, let endTime = task.endTime else { return false }
+            let startHour = calendar.component(.hour, from: startTime)
+            let endHour = calendar.component(.hour, from: endTime)
+            
+            if startHour <= hour && hour < endHour {
+                return true
+            }
+            if startHour == hour {
+                return true
+            }
+            return false
+        }
+    }
+    
+    func getTodaysProgress() -> (completed: Int, total: Int, percentage: Double) {
+        let todaysTasks = getTodaysTasks()
+        let completed = todaysTasks.filter(\.isCompleted).count
+        let total = todaysTasks.count
+        let percentage = total > 0 ? Double(completed) / Double(total) : 0.0
+        return (completed, total, percentage)
+    }
+    
+    // Sleep schedule methods (unchanged)
+    func getSleepScheduleForDate(_ date: Date) -> SleepScheduleItem? {
+        if let specificSchedule = getSleepScheduleForSpecificDate(date) {
+            return specificSchedule
+        }
+        return createDefaultSleepSchedule(for: date)
+    }
+    
+    func updateSleepSchedule(for date: Date, startHour: Int, duration: Double) {
+        do {
+            let calendar = Calendar.current
+            let startTime = calendar.date(bySettingHour: startHour, minute: 0, second: 0, of: date) ?? date
+            let endTime = startTime.addingTimeInterval(duration * 3600)
+            
+            let descriptor = FetchDescriptor<SleepScheduleItem>()
+            let existingSleep = try context.fetch(descriptor)
+            
+            if let existing = existingSleep.first {
+                existing.startTime = startTime
+                existing.endTime = endTime
+            } else {
+                let sleepItem = SleepScheduleItem(
+                    date: date,
+                    startTime: startTime,
+                    endTime: endTime
+                )
+                context.insert(sleepItem)
+            }
+            
+            try saveContextSafely()
+            errorMessage = nil
+        } catch {
+            errorMessage = "Failed to update sleep schedule: \(error.localizedDescription)"
+        }
+    }
+    
+    func getSleepScheduleForDate(_ date: Date) -> SleepScheduleItem? {
+        return getSleepScheduleForSpecificDate(date)
+    }
+
+    func getSleepScheduleForSpecificDate(_ date: Date) -> SleepScheduleItem? {
+        let calendar = Calendar.current
+        let descriptor = FetchDescriptor<SleepScheduleItem>()
+        let sleepItems = (try? context.fetch(descriptor)) ?? []
+        
+        return sleepItems.first { item in
+            calendar.isDate(item.date, inSameDayAs: date)
+        }
+    }
+    
+    func updateSleepScheduleForSpecificDate(_ date: Date, sleepTime: Date, wakeTime: Date, duration: Double) {
+        do {
+            let calendar = Calendar.current
+            let startTime = calendar.date(bySettingHour: calendar.component(.hour, from: sleepTime), 
+                                         minute: calendar.component(.minute, from: sleepTime), 
+                                         second: 0, of: date) ?? sleepTime
+            let endTime = startTime.addingTimeInterval(duration * 3600)
+            
+            if let existing = getSleepScheduleForSpecificDate(date) {
+                existing.startTime = startTime
+                existing.endTime = endTime
+            } else {
+                let sleepItem = SleepScheduleItem(
+                    date: date,
+                    startTime: startTime,
+                    endTime: endTime
+                )
+                context.insert(sleepItem)
+            }
+            
+            try saveContextSafely()
+            errorMessage = nil
+        } catch {
+            errorMessage = "Failed to update sleep schedule: \(error.localizedDescription)"
+        }
+    }
+    
+    private func createDefaultSleepSchedule(for date: Date) -> SleepScheduleItem {
+        let calendar = Calendar.current
+        let startTime = calendar.date(bySettingHour: 22, minute: 0, second: 0, of: date) ?? date
+        let endTime = calendar.date(bySettingHour: 6, minute: 0, second: 0, of: date.addingTimeInterval(24*3600)) ?? date
+        
+        return SleepScheduleItem(
+            date: date,
+            startTime: startTime,
+            endTime: endTime
+        )
+    }
+    
+    private func invalidateDailyCache(for date: Date?) {
+        guard let date = date else { return }
+        let cacheKey = dateFormatter.string(from: date)
+        dailyTasksCache.removeValue(forKey: cacheKey)
+    }
+    
+    private lazy var dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+    
+    func clearCaches() {
+        dailyTasksCache.removeAll()
+        tasksCache.removeAll()
+        lastCacheUpdate = Date.distantPast
+    }
+}
+
+    // MARK: - Sleep Schedule Management
+    
+    func getSleepScheduleForDate(_ date: Date) -> SleepScheduleItem? {
+        return getSleepScheduleForSpecificDate(date)
+    }
+
+    func getSleepScheduleForSpecificDate(_ date: Date) -> SleepScheduleItem? {
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: date)
+        let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay) ?? date
+        
+        let descriptor = FetchDescriptor<SleepScheduleItem>(
+            predicate: #Predicate { sleep in
+                sleep.date >= startOfDay && sleep.date < endOfDay
+            }
+        )
+        
+        do {
+            let schedules = try context.fetch(descriptor)
+            return schedules.first
+        } catch {
+            print("Error fetching sleep schedule: \(error)")
+            return nil
+        }
+    }
+    
+    func addSleepSchedule(_ sleepSchedule: SleepScheduleItem) {
+        // Remove any existing sleep schedule for this date
+        if let existing = getSleepScheduleForSpecificDate(sleepSchedule.date) {
+            context.delete(existing)
+        }
+        
+        // Add the new sleep schedule
+        context.insert(sleepSchedule)
+        
+        do {
+            try context.save()
+        } catch {
+            setError("Failed to save sleep schedule: \(error.localizedDescription)")
+        }
+    }
+    
+    func updateSleepScheduleForSpecificDate(_ date: Date, sleepTime: Date, wakeTime: Date, duration: Double) {
+        let sleepSchedule = SleepScheduleItem(
+            date: date,
+            startTime: sleepTime,
+            endTime: wakeTime
+        )
+        addSleepSchedule(sleepSchedule)
+    }

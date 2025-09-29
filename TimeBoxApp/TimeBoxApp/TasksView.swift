@@ -2,7 +2,7 @@
 //  TasksView.swift
 //  TimeBoxApp
 //
-//  Fixed: Scheduled tasks stay visible in to-do list
+//  ENHANCED: Simple template overlay without complex dependencies
 //
 
 import SwiftUI
@@ -12,87 +12,118 @@ struct TasksView: View {
     @EnvironmentObject private var taskManager: TaskManager
     @EnvironmentObject private var themeManager: ThemeManager
     @State private var newTaskTitle = ""
+    @State private var showingTemplateOverlay = false
     @FocusState private var isInputFocused: Bool
     
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                // Progress header
-                ProgressHeaderView()
-                
-                // Tasks list
-                ScrollView {
-                    LazyVStack(spacing: 12) {
-                        // Today's scheduled tasks
-                        let todaysTasks = taskManager.getTodaysTasks()
-                        
-                        if !todaysTasks.isEmpty {
-                            SectionHeaderView(title: "Today's Schedule", count: todaysTasks.count)
-                            
-                            ForEach(todaysTasks) { task in
-                                TaskRowView(task: task)
-                            }
-                        }
-                        
-                        // ALL tasks (including scheduled ones) - FIXED
-                        let allTasks = taskManager.getAllTasks()
-                        
-                        if !allTasks.isEmpty {
-                            SectionHeaderView(title: "To Do", count: allTasks.count)
-                            
-                            ForEach(allTasks) { task in
-                                TaskRowView(task: task)
-                            }
-                        }
-                        
-                        // Empty state
-                        if todaysTasks.isEmpty && allTasks.isEmpty {
-                            EmptyStateView()
+            ZStack {
+                VStack(spacing: 0) {
+                    // Progress header
+                    ProgressHeaderView()
+                    
+                    // Error alert display
+                    if let errorMessage = taskManager.errorMessage {
+                        ErrorBannerView(message: errorMessage) {
+                            taskManager.clearError()
                         }
                     }
-                    .padding()
-                    .padding(.bottom, 100)
-                }
-                
-                Spacer()
-                
-                // Bottom input
-                VStack(spacing: 0) {
-                    Divider()
-                        .background(themeManager.secondaryTextColor.opacity(0.3))
                     
-                    HStack(spacing: 16) {
-                        HStack(spacing: 12) {
-                            TextField("Add reminder", text: $newTaskTitle)
-                                .textFieldStyle(.plain)
-                                .focused($isInputFocused)
-                                .onSubmit {
-                                    addTask()
+                    // Loading state
+                    if taskManager.isLoading {
+                        LoadingView()
+                    } else {
+                        // Tasks list
+                        ScrollView {
+                            LazyVStack(spacing: 16) {
+                                // To Do section first
+                                let incompleteTasks = taskManager.getIncompleteTasks()
+                                
+                                if !incompleteTasks.isEmpty {
+                                    SectionHeaderView(title: "To Do")
+                                    
+                                    ForEach(incompleteTasks) { task in
+                                        TaskRowView(task: task)
+                                    }
                                 }
-                                .font(.body)
+                                
+                                // Completed tasks second
+                                let completedTasks = taskManager.getCompletedTasks()
+                                
+                                if !completedTasks.isEmpty {
+                                    if !incompleteTasks.isEmpty {
+                                        Divider()
+                                            .padding(.vertical, 8)
+                                    }
+                                    
+                                    SectionHeaderView(title: "Completed Today")
+                                    
+                                    ForEach(completedTasks) { task in
+                                        TaskRowView(task: task)
+                                    }
+                                }
+                                
+                                // Empty state
+                                if incompleteTasks.isEmpty && completedTasks.isEmpty {
+                                    EmptyStateView()
+                                }
+                            }
+                            .padding()
+                            .padding(.bottom, 100)
+                        }
+                    }
+                    
+                    Spacer()
+                    
+                    // Bottom input with template support
+                    VStack(spacing: 0) {
+                        Divider()
+                            .background(themeManager.secondaryTextColor.opacity(0.3))
+                        
+                        HStack(spacing: 16) {
+                            HStack(spacing: 12) {
+                                TextField("Add reminder", text: $newTaskTitle)
+                                    .textFieldStyle(.plain)
+                                    .focused($isInputFocused)
+                                    .onSubmit {
+                                        addTask()
+                                    }
+                                    .font(.body)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 12)
+                            .background(themeManager.cardBackgroundColor)
+                            .cornerRadius(25)
+                            
+                            // ENHANCED: Add button with long-press template support
+                            Button(action: addTask) {
+                                Image(systemName: "plus")
+                                    .font(.title3)
+                                    .fontWeight(.medium)
+                                    .foregroundColor(.white)
+                                    .frame(width: 30, height: 30)
+                                    .background(
+                                        Circle()
+                                            .fill(.blue)
+                                    )
+                            }
+                            .disabled(newTaskTitle.trimmingCharacters(in: .whitespaces).isEmpty && !showingTemplateOverlay)
+                            .opacity(newTaskTitle.trimmingCharacters(in: .whitespaces).isEmpty && !showingTemplateOverlay ? 0.5 : 1.0)
+                            .onLongPressGesture {
+                                showingTemplateOverlay = true
+                            }
                         }
                         .padding(.horizontal, 16)
                         .padding(.vertical, 12)
-                        .background(themeManager.cardBackgroundColor)
-                        .cornerRadius(25)
-                        
-                        Button(action: addTask) {
-                            Image(systemName: "plus")
-                                .font(.title3)
-                                .fontWeight(.medium)
-                                .foregroundColor(.white)
-                                .frame(width: 30, height: 30)
-                                .background(
-                                    Circle()
-                                        .fill(.blue)
-                                )
-                        }
-                        .disabled(newTaskTitle.trimmingCharacters(in: .whitespaces).isEmpty)
-                        .opacity(newTaskTitle.trimmingCharacters(in: .whitespaces).isEmpty ? 0.5 : 1.0)
+                        .background(themeManager.backgroundColor)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .background(themeManager.backgroundColor)
+                }
+                
+                // ENHANCED: Template overlay
+                if showingTemplateOverlay {
+                    TemplateOverlayView(isShowing: $showingTemplateOverlay) { template in
+                        createTaskFromTemplate(template)
+                    }
                 }
             }
             .background(themeManager.backgroundColor)
@@ -113,9 +144,89 @@ struct TasksView: View {
         newTaskTitle = ""
         isInputFocused = true
     }
+    
+    private func createTaskFromTemplate(_ template: TaskTemplate) {
+        taskManager.addTask(
+            title: template.name,
+            taskType: template.taskType
+        )
+        showingTemplateOverlay = false
+    }
 }
 
-// Keep existing TaskRowView and other components unchanged
+// ENHANCED: Simple template overlay
+struct TemplateOverlayView: View {
+    @Binding var isShowing: Bool
+    let onTemplateSelected: (TaskTemplate) -> Void
+    @EnvironmentObject private var themeManager: ThemeManager
+    
+    var body: some View {
+        ZStack {
+            // Background overlay
+            Color.black.opacity(0.4)
+                .ignoresSafeArea()
+                .onTapGesture {
+                    isShowing = false
+                }
+            
+            // Template widgets
+            VStack(spacing: 20) {
+                Text("Choose Template")
+                    .font(.headline)
+                    .foregroundColor(themeManager.primaryTextColor)
+                    .padding()
+                    .background(themeManager.cardBackgroundColor)
+                    .cornerRadius(12)
+                
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 16) {
+                    ForEach(TaskTemplate.defaultTemplates) { template in
+                        TemplateWidgetView(template: template) {
+                            onTemplateSelected(template)
+                        }
+                    }
+                }
+                .padding()
+            }
+            .background(themeManager.backgroundColor)
+            .cornerRadius(20)
+            .padding()
+        }
+        .transition(.opacity.combined(with: .scale))
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isShowing)
+    }
+}
+
+struct TemplateWidgetView: View {
+    let template: TaskTemplate
+    let onTap: () -> Void
+    
+    var body: some View {
+        Button(action: onTap) {
+            VStack(spacing: 8) {
+                Image(systemName: template.icon)
+                    .font(.title2)
+                    .foregroundColor(template.color)
+                
+                Text(template.name)
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                
+                Text("\(Int(template.defaultDuration / 60))m")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            .padding()
+            .frame(width: 80, height: 80)
+            .background(template.color.opacity(0.1))
+            .cornerRadius(12)
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+}
+
+// Keep all existing components unchanged...
 struct TaskRowView: View {
     let task: TaskItem
     @EnvironmentObject private var taskManager: TaskManager
@@ -125,10 +236,15 @@ struct TaskRowView: View {
     
     var body: some View {
         HStack(spacing: 12) {
-            Button(action: { taskManager.toggleTaskCompletion(task) }) {
+            Button(action: { 
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    taskManager.toggleTaskCompletion(task)
+                }
+            }) {
                 Image(systemName: task.isCompleted ? "checkmark.circle.fill" : "circle")
                     .font(.title3)
                     .foregroundColor(task.isCompleted ? .green : themeManager.secondaryTextColor)
+                    .scaleEffect(task.isCompleted ? 1.1 : 1.0)
             }
             
             VStack(alignment: .leading, spacing: 4) {
@@ -136,7 +252,7 @@ struct TaskRowView: View {
                     Text(task.title)
                         .font(.subheadline)
                         .fontWeight(.medium)
-                        .foregroundColor(themeManager.primaryTextColor)
+                        .foregroundColor(task.isCompleted ? themeManager.secondaryTextColor : themeManager.primaryTextColor)
                         .strikethrough(task.isCompleted)
                     
                     Spacer()
@@ -160,11 +276,8 @@ struct TaskRowView: View {
                         .lineLimit(2)
                 }
                 
-                if task.startTime == nil {
+                if task.startTime == nil && !task.isCompleted {
                     HStack(spacing: 4) {
-                        Image(systemName: "calendar.badge.plus")
-                            .font(.caption2)
-                            .foregroundColor(.orange)
                         Text("Tap to schedule")
                             .font(.caption2)
                             .foregroundColor(.orange)
@@ -178,11 +291,13 @@ struct TaskRowView: View {
                 .cornerRadius(2)
         }
         .padding()
-        .background(themeManager.cardBackgroundColor)
+        .background(task.isCompleted ? themeManager.cardBackgroundColor.opacity(0.7) : themeManager.cardBackgroundColor)
         .cornerRadius(10)
-        .opacity(task.isCompleted ? 0.7 : 1.0)
+        .opacity(task.isCompleted ? 0.8 : 1.0)
         .onTapGesture {
-            showingScheduler = true
+            if !task.isCompleted {
+                showingScheduler = true
+            }
         }
         .onLongPressGesture {
             showingDeleteOptions = true
@@ -197,13 +312,130 @@ struct TaskRowView: View {
             Button("Delete Task", role: .destructive) {
                 taskManager.deleteTask(task)
             }
-            Button("Edit Schedule") {
-                showingScheduler = true
+            if !task.isCompleted {
+                Button("Edit Schedule") {
+                    showingScheduler = true
+                }
             }
             Button("Cancel", role: .cancel) { }
         } message: {
             Text(task.title)
         }
+    }
+}
+
+struct ProgressHeaderView: View {
+    @EnvironmentObject private var taskManager: TaskManager
+    @EnvironmentObject private var themeManager: ThemeManager
+    
+    var body: some View {
+        let progress = taskManager.getTodaysProgress()
+        
+        VStack(spacing: 8) {
+            HStack {
+                VStack(alignment: .leading) {
+                    Text("Today")
+                        .font(.title2)
+                        .fontWeight(.bold)
+                        .foregroundColor(themeManager.primaryTextColor)
+                    
+                    Text("\(progress.completed) of \(progress.total) tasks completed")
+                        .font(.caption)
+                        .foregroundColor(themeManager.secondaryTextColor)
+                }
+                
+                Spacer()
+                
+                ZStack {
+                    Circle()
+                        .stroke(themeManager.secondaryTextColor.opacity(0.2), lineWidth: 4)
+                        .frame(width: 50, height: 50)
+                    
+                    Circle()
+                        .trim(from: 0, to: progress.percentage)
+                        .stroke(Color.blue, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                        .frame(width: 50, height: 50)
+                        .rotationEffect(.degrees(-90))
+                        .animation(.easeInOut(duration: 0.5), value: progress.percentage)
+                    
+                    Text("\(Int(progress.percentage * 100))%")
+                        .font(.caption2)
+                        .fontWeight(.medium)
+                        .foregroundColor(themeManager.primaryTextColor)
+                }
+            }
+        }
+        .padding()
+        .background(themeManager.cardBackgroundColor)
+        .cornerRadius(12)
+        .padding(.horizontal)
+    }
+}
+
+struct SectionHeaderView: View {
+    let title: String
+    @EnvironmentObject private var themeManager: ThemeManager
+    
+    var body: some View {
+        HStack {
+            Text(title)
+                .font(.title3)
+                .fontWeight(.semibold)
+                .foregroundColor(themeManager.primaryTextColor)
+            
+            Spacer()
+        }
+        .padding(.horizontal, 4)
+    }
+}
+
+struct ErrorBannerView: View {
+    let message: String
+    let onDismiss: () -> Void
+    @EnvironmentObject private var themeManager: ThemeManager
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundColor(.orange)
+                .font(.headline)
+            
+            Text(message)
+                .font(.subheadline)
+                .foregroundColor(themeManager.primaryTextColor)
+                .multilineTextAlignment(.leading)
+            
+            Spacer()
+            
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.caption)
+                    .foregroundColor(themeManager.secondaryTextColor)
+            }
+        }
+        .padding()
+        .background(Color.orange.opacity(0.1))
+        .cornerRadius(8)
+        .padding(.horizontal)
+        .transition(.move(edge: .top).combined(with: .opacity))
+    }
+}
+
+struct LoadingView: View {
+    @EnvironmentObject private var themeManager: ThemeManager
+    
+    var body: some View {
+        VStack(spacing: 16) {
+            ProgressView()
+                .scaleEffect(1.2)
+                .progressViewStyle(CircularProgressViewStyle(tint: .blue))
+            
+            Text("Loading tasks...")
+                .font(.subheadline)
+                .foregroundColor(themeManager.secondaryTextColor)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(themeManager.backgroundColor)
     }
 }
 
@@ -312,77 +544,6 @@ struct NativeSchedulerSheet: View {
     }
 }
 
-// Keep existing supporting views
-struct ProgressHeaderView: View {
-    @EnvironmentObject private var taskManager: TaskManager
-    @EnvironmentObject private var themeManager: ThemeManager
-    
-    var body: some View {
-        let progress = taskManager.getTodaysProgress()
-        
-        VStack(spacing: 8) {
-            HStack {
-                VStack(alignment: .leading) {
-                    Text("Today")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(themeManager.primaryTextColor)
-                    
-                    Text("\(progress.completed) of \(progress.total) tasks completed")
-                        .font(.caption)
-                        .foregroundColor(themeManager.secondaryTextColor)
-                }
-                
-                Spacer()
-                
-                ZStack {
-                    Circle()
-                        .stroke(themeManager.secondaryTextColor.opacity(0.2), lineWidth: 4)
-                        .frame(width: 50, height: 50)
-                    
-                    Circle()
-                        .trim(from: 0, to: progress.percentage)
-                        .stroke(Color.blue, style: StrokeStyle(lineWidth: 4, lineCap: .round))
-                        .frame(width: 50, height: 50)
-                        .rotationEffect(.degrees(-90))
-                        .animation(.easeInOut, value: progress.percentage)
-                    
-                    Text("\(Int(progress.percentage * 100))%")
-                        .font(.caption2)
-                        .fontWeight(.medium)
-                        .foregroundColor(themeManager.primaryTextColor)
-                }
-            }
-        }
-        .padding()
-        .background(themeManager.cardBackgroundColor)
-        .cornerRadius(12)
-        .padding(.horizontal)
-    }
-}
-
-struct SectionHeaderView: View {
-    let title: String
-    let count: Int
-    @EnvironmentObject private var themeManager: ThemeManager
-    
-    var body: some View {
-        HStack {
-            Text(title)
-                .font(.headline)
-                .fontWeight(.semibold)
-                .foregroundColor(themeManager.primaryTextColor)
-            
-            Text("(\(count))")
-                .font(.caption)
-                .foregroundColor(themeManager.secondaryTextColor)
-            
-            Spacer()
-        }
-        .padding(.horizontal, 4)
-    }
-}
-
 struct EmptyStateView: View {
     @EnvironmentObject private var themeManager: ThemeManager
     
@@ -397,9 +558,10 @@ struct EmptyStateView: View {
                 .fontWeight(.medium)
                 .foregroundColor(themeManager.primaryTextColor)
             
-            Text("Add your first task below")
+            Text("Add your first task below or long-press + for templates")
                 .font(.body)
                 .foregroundColor(themeManager.secondaryTextColor)
+                .multilineTextAlignment(.center)
         }
         .padding(.top, 60)
     }

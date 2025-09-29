@@ -2,7 +2,7 @@
 //  CalendarView.swift
 //  TimeBoxApp
 //
-//  Fixed: Month name only, subtle year indicator in corner
+//  FIXED: Proper navigation to daily view
 //
 
 import SwiftUI
@@ -12,219 +12,208 @@ struct CalendarView: View {
     @EnvironmentObject private var taskManager: TaskManager
     @EnvironmentObject private var themeManager: ThemeManager
     @State private var selectedDate = Date()
+    @State private var currentMonth = Date()
     @State private var showingDailyView = false
-    @State private var displayedMonth = Date()
-    
-    private let calendar = Calendar.current
     
     var body: some View {
-        GeometryReader { geometry in
+        NavigationStack {
             VStack(spacing: 0) {
-                // Navigation header with subtle year
+                // Calendar grid
+                CalendarGridView(
+                    currentMonth: $currentMonth,
+                    selectedDate: $selectedDate,
+                    onDateTap: { date in
+                        selectedDate = date
+                        showingDailyView = true
+                    }
+                )
+                
+                Spacer()
+            }
+            .background(themeManager.backgroundColor)
+            .navigationTitle("Calendar")
+            .navigationBarHidden(true)
+            .navigationDestination(isPresented: $showingDailyView) {
+                DailyTimelineView(selectedDate: selectedDate)
+            }
+        }
+    }
+}
+
+struct CalendarGridView: View {
+    @Binding var currentMonth: Date
+    @Binding var selectedDate: Date
+    let onDateTap: (Date) -> Void
+    @EnvironmentObject private var taskManager: TaskManager
+    @EnvironmentObject private var themeManager: ThemeManager
+    
+    private let calendar = Calendar.current
+    private let monthFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMMM"
+        return formatter
+    }()
+    
+    private let yearFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy"
+        return formatter
+    }()
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header layout
+            VStack(spacing: 12) {
                 HStack {
-                    // Subtle year indicator in left corner
-                    Text(displayedMonth, format: .dateTime.year())
-                        .font(.caption)
+                    Text(yearFormatter.string(from: currentMonth))
+                        .font(.subheadline)
+                        .fontWeight(.medium)
                         .foregroundColor(themeManager.secondaryTextColor)
-                        .padding(.leading, 4)
+                    
+                    Text(monthFormatter.string(from: currentMonth))
+                        .font(.title)
+                        .fontWeight(.bold)
+                        .foregroundColor(themeManager.primaryTextColor)
                     
                     Spacer()
                     
-                    HStack(spacing: 20) {
-                        Button(action: previousMonth) {
+                    HStack(spacing: 16) {
+                        Button(action: { changeMonth(-1) }) {
                             Image(systemName: "chevron.left")
-                                .font(.title2)
-                                .fontWeight(.medium)
+                                .font(.title3)
                                 .foregroundColor(themeManager.primaryTextColor)
                         }
                         
-                        Button(action: nextMonth) {
+                        Button(action: { changeMonth(1) }) {
                             Image(systemName: "chevron.right")
-                                .font(.title2)
-                                .fontWeight(.medium)
+                                .font(.title3)
                                 .foregroundColor(themeManager.primaryTextColor)
                         }
                     }
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 16)
-                .padding(.bottom, 24)
+                .padding(.horizontal)
                 
-                // Month section header - just month name
-                VStack(alignment: .leading, spacing: 0) {
-                    HStack {
-                        Text(displayedMonth, format: .dateTime.month(.wide))
-                            .font(.largeTitle)
-                            .fontWeight(.bold)
-                            .foregroundColor(themeManager.primaryTextColor)
-                        
-                        Spacer()
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 8)
-                    
-                    Rectangle()
-                        .fill(themeManager.secondaryTextColor.opacity(0.3))
-                        .frame(height: 1)
-                        .padding(.horizontal, 20)
-                }
-                .padding(.bottom, 20)
-                
-                // Weekday headers
+                Rectangle()
+                    .fill(themeManager.primaryTextColor.opacity(0.3))
+                    .frame(height: 2)
+                    .padding(.horizontal)
+            }
+            .padding(.top)
+            
+            // Weekday headers
+            VStack(spacing: 0) {
                 HStack(spacing: 0) {
-                    ForEach(calendar.shortWeekdaySymbols, id: \.self) { weekday in
-                        Text(weekday.uppercased())
+                    ForEach(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"], id: \.self) { day in
+                        Text(day)
                             .font(.caption)
-                            .fontWeight(.semibold)
+                            .fontWeight(.medium)
                             .foregroundColor(themeManager.secondaryTextColor)
                             .frame(maxWidth: .infinity)
                     }
                 }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 16)
+                .padding(.horizontal)
+                .padding(.vertical, 8)
                 
-                // Calendar grid
-                let cellSize = (geometry.size.width - 60) / 7
-                
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 7), spacing: 12) {
-                    ForEach(daysInMonth, id: \.self) { date in
-                        CalendarDayCell(
+                Rectangle()
+                    .fill(themeManager.secondaryTextColor.opacity(0.2))
+                    .frame(height: 1)
+                    .padding(.horizontal)
+            }
+            
+            // Calendar days with better spacing
+            VStack(spacing: 4) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 7), spacing: 8) {
+                    ForEach(Array(calendarDays.enumerated()), id: \.offset) { index, date in
+                        CalendarDayView(
                             date: date,
-                            tasks: taskManager.getTasksForDate(date),
-                            isToday: calendar.isDateInToday(date),
-                            isCurrentMonth: calendar.isDate(date, equalTo: displayedMonth, toGranularity: .month),
-                            cellSize: cellSize
+                            selectedDate: $selectedDate,
+                            currentMonth: currentMonth,
+                            taskCount: taskManager.getTasksForDate(date).count,
+                            onTap: { onDateTap(date) }
                         )
-                        .frame(width: cellSize, height: cellSize)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            selectedDate = date
-                            showingDailyView = true
-                        }
                     }
                 }
-                .padding(.horizontal, 30)
-                
-                Spacer(minLength: 120)
+                .padding(.horizontal)
+                .padding(.bottom)
             }
-        }
-        .background(themeManager.backgroundColor)
-        .navigationBarHidden(true)
-        .sheet(isPresented: $showingDailyView) {
-            DailyTimelineView(selectedDate: selectedDate)
-        }
-        .onAppear {
-            taskManager.objectWillChange.send()
         }
     }
     
-    private var daysInMonth: [Date] {
-        guard let monthInterval = calendar.dateInterval(of: .month, for: displayedMonth) else { return [] }
-        
-        let monthStart = monthInterval.start
-        let firstWeekday = calendar.component(.weekday, from: monthStart)
-        let daysFromFirstWeekday = (firstWeekday - calendar.firstWeekday + 7) % 7
-        
-        guard let calendarStart = calendar.date(byAdding: .day, value: -daysFromFirstWeekday, to: monthStart) else { return [] }
+    private var calendarDays: [Date] {
+        guard let monthInterval = calendar.dateInterval(of: .month, for: currentMonth),
+              let monthFirstWeek = calendar.dateInterval(of: .weekOfYear, for: monthInterval.start),
+              let monthLastWeek = calendar.dateInterval(of: .weekOfYear, for: monthInterval.end)
+        else { return [] }
         
         var days: [Date] = []
-        var currentDate = calendarStart
+        var current = monthFirstWeek.start
         
-        let weeksNeeded = calendar.range(of: .weekOfMonth, in: .month, for: displayedMonth)?.count ?? 6
-        
-        for _ in 0..<(weeksNeeded * 7) {
-            days.append(currentDate)
-            currentDate = calendar.date(byAdding: .day, value: 1, to: currentDate) ?? currentDate
+        while current < monthLastWeek.end {
+            days.append(current)
+            current = calendar.date(byAdding: .day, value: 1, to: current) ?? current
         }
         
         return days
     }
     
-    private func previousMonth() {
+    private func changeMonth(_ value: Int) {
         withAnimation(.easeInOut(duration: 0.3)) {
-            displayedMonth = calendar.date(byAdding: .month, value: -1, to: displayedMonth) ?? displayedMonth
-        }
-    }
-    
-    private func nextMonth() {
-        withAnimation(.easeInOut(duration: 0.3)) {
-            displayedMonth = calendar.date(byAdding: .month, value: 1, to: displayedMonth) ?? displayedMonth
+            currentMonth = calendar.date(byAdding: .month, value: value, to: currentMonth) ?? currentMonth
         }
     }
 }
 
-struct CalendarDayCell: View {
+struct CalendarDayView: View {
     let date: Date
-    let tasks: [TaskItem]
-    let isToday: Bool
-    let isCurrentMonth: Bool
-    let cellSize: CGFloat
+    @Binding var selectedDate: Date
+    let currentMonth: Date
+    let taskCount: Int
+    let onTap: () -> Void
     @EnvironmentObject private var themeManager: ThemeManager
     
+    private let calendar = Calendar.current
+    
     var body: some View {
-        VStack(spacing: 8) {
-            Text("\(Calendar.current.component(.day, from: date))")
-                .font(.system(size: min(cellSize * 0.28, 20), weight: isToday ? .bold : .medium))
-                .foregroundColor(textColor)
-                .frame(width: min(cellSize * 0.6, 32), height: min(cellSize * 0.6, 32))
-                .background(
-                    Circle()
-                        .fill(isToday ? .blue : Color.clear)
-                )
-            
-            if !tasks.isEmpty {
-                HStack(spacing: 3) {
-                    ForEach(Array(tasks.prefix(3).enumerated()), id: \.offset) { _, task in
+        Button(action: onTap) {
+            VStack(spacing: 6) {
+                Text("\(calendar.component(.day, from: date))")
+                    .font(.subheadline)
+                    .fontWeight(calendar.isDate(date, inSameDayAs: selectedDate) ? .bold : .medium)
+                    .foregroundColor(textColor)
+                
+                HStack(spacing: 2) {
+                    ForEach(0..<min(taskCount, 3), id: \.self) { _ in
                         Circle()
-                            .fill(task.displayColor)
-                            .frame(width: 6, height: 6)
+                            .fill(Color.blue)
+                            .frame(width: 4, height: 4)
                     }
                     
-                    if tasks.count > 3 {
+                    if taskCount > 3 {
                         Text("+")
-                            .font(.system(size: 8, weight: .medium))
-                            .foregroundColor(themeManager.secondaryTextColor)
+                            .font(.caption2)
+                            .foregroundColor(.blue)
+                            .fontWeight(.bold)
                     }
                 }
-                .frame(height: 12)
-            } else {
-                Rectangle()
-                    .fill(Color.clear)
-                    .frame(height: 12)
+                .frame(height: 6)
             }
-            
-            Spacer(minLength: 0)
+            .frame(width: 40, height: 55)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(calendar.isDate(date, inSameDayAs: selectedDate) ? Color.blue.opacity(0.2) : Color.clear)
+            )
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(backgroundColor)
-        )
+        .buttonStyle(PlainButtonStyle())
     }
     
     private var textColor: Color {
-        if isToday {
-            return .white
-        } else if !isCurrentMonth {
-            return themeManager.secondaryTextColor.opacity(0.3)
-        } else {
+        if calendar.isDate(date, inSameDayAs: Date()) {
+            return .blue
+        } else if calendar.isDate(date, equalTo: currentMonth, toGranularity: .month) {
             return themeManager.primaryTextColor
-        }
-    }
-    
-    private var backgroundColor: Color {
-        if !tasks.isEmpty && isCurrentMonth {
-            return themeManager.cardBackgroundColor.opacity(0.5)
         } else {
-            return Color.clear
+            return themeManager.secondaryTextColor.opacity(0.5)
         }
-    }
-}
-
-extension Calendar {
-    func startOfMonth(for date: Date) -> Date? {
-        let components = dateComponents([.year, .month], from: date)
-        return self.date(from: components)
     }
 }
 

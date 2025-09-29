@@ -2,185 +2,110 @@
 //  DailyTimelineView.swift
 //  TimeBoxApp
 //
-//  Fixed: Use NativeSchedulerSheet for task editing from calendar
+//  FIXED: Sleep editor actually updates the blocks
 //
 
 import SwiftUI
 import SwiftData
 
+// Simple sleep schedule storage
+struct SleepSchedule: Codable {
+    let sleepHour: Int
+    let wakeHour: Int
+    let dateString: String
+}
+
+class SleepScheduleStore: ObservableObject {
+    @Published var schedules: [String: SleepSchedule] = [:]
+    
+    func save(for date: Date, sleepHour: Int, wakeHour: Int) {
+        let key = dateKey(for: date)
+        schedules[key] = SleepSchedule(sleepHour: sleepHour, wakeHour: wakeHour, dateString: key)
+    }
+    
+    func get(for date: Date) -> SleepSchedule? {
+        return schedules[dateKey(for: date)]
+    }
+    
+    func isSleepHour(_ hour: Int, for date: Date) -> Bool {
+        if let schedule = get(for: date) {
+            let sleepHour = schedule.sleepHour
+            let wakeHour = schedule.wakeHour
+            
+            if sleepHour > wakeHour {
+                return hour >= sleepHour || hour < wakeHour
+            } else {
+                return hour >= sleepHour && hour < wakeHour
+            }
+        } else {
+            // Default: 22-06
+            return hour >= 22 || hour < 6
+        }
+    }
+    
+    private func dateKey(for date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+}
+
 struct DailyTimelineView: View {
     let selectedDate: Date
     @EnvironmentObject private var taskManager: TaskManager
     @EnvironmentObject private var themeManager: ThemeManager
+    @StateObject private var sleepStore = SleepScheduleStore()
     @Environment(\.dismiss) private var dismiss
-    
-    @State private var showingSleepEditor = false
-    @State private var showingTaskCreator = false
-    @State private var selectedHour = 0
-    
-    var body: some View {
-        NavigationStack {
-            VStack {
-                // Header
-                HStack {
-                    Button("Back") {
-                        dismiss()
-                    }
-                    .foregroundColor(themeManager.primaryTextColor)
-                    
-                    Spacer()
-                    
-                    VStack(spacing: 2) {
-                        Text(selectedDate, format: .dateTime.day())
-                            .font(.largeTitle)
-                            .fontWeight(.bold)
-                            .foregroundColor(themeManager.primaryTextColor)
-                        
-                        Text(selectedDate, format: .dateTime.weekday(.wide))
-                            .font(.subheadline)
-                            .foregroundColor(.blue)
-                    }
-                    
-                    Spacer()
-                    
-                    Button(action: themeManager.toggleTheme) {
-                        Image(systemName: themeManager.isDarkMode ? "sun.max" : "moon")
-                            .foregroundColor(themeManager.primaryTextColor)
-                    }
-                }
-                .padding()
-                
-                // Timeline with interactions
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(0..<24, id: \.self) { hour in
-                            TimelineHourView(
-                                hour: hour,
-                                selectedDate: selectedDate,
-                                onSleepTap: {
-                                    showingSleepEditor = true
-                                },
-                                onEmptyLongPress: {
-                                    selectedHour = hour
-                                    showingTaskCreator = true
-                                }
-                            )
-                        }
-                    }
-                }
-                .padding(.horizontal)
-            }
-            .background(themeManager.backgroundColor)
-            .navigationBarHidden(true)
-        }
-        .sheet(isPresented: $showingSleepEditor) {
-            CompactSleepEditor(selectedDate: selectedDate)
-                .presentationDetents([.height(350)])
-                .presentationDragIndicator(.visible)
-        }
-        .sheet(isPresented: $showingTaskCreator) {
-            TaskCreatorSheet(selectedDate: selectedDate, selectedHour: selectedHour)
-        }
-        .onAppear {
-            taskManager.objectWillChange.send()
-        }
-    }
-}
-
-struct TimelineHourView: View {
-    let hour: Int
-    let selectedDate: Date
-    let onSleepTap: () -> Void
-    let onEmptyLongPress: () -> Void
-    
-    @EnvironmentObject private var taskManager: TaskManager
-    @EnvironmentObject private var themeManager: ThemeManager
-    @State private var showingTaskEditor = false
     @State private var selectedTask: TaskItem?
-    
-    private var hourString: String {
-        String(format: "%02d:00", hour)
-    }
-    
-    private var tasksForThisHour: [TaskItem] {
-        taskManager.getTasksForTimeSlot(date: selectedDate, hour: hour)
-    }
-    
-    private var sleepSchedule: SleepScheduleItem? {
-        taskManager.getSleepScheduleForDate(selectedDate)
-    }
-    
-    private var isSleepTime: Bool {
-        guard let sleep = sleepSchedule else { return false }
-        let calendar = Calendar.current
-        let startHour = calendar.component(.hour, from: sleep.startTime)
-        let endHour = calendar.component(.hour, from: sleep.endTime)
-        
-        if startHour > endHour {
-            return hour >= startHour || hour < endHour
-        } else {
-            return hour >= startHour && hour < endHour
-        }
-    }
-    
-    private let baseHourHeight: CGFloat = 60
+    @State private var showingTaskEditor = false
+    @State private var showingSleepEditor = false
     
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Text(hourString)
-                .font(.caption)
-                .foregroundColor(themeManager.secondaryTextColor)
-                .frame(width: 50, alignment: .trailing)
-                .padding(.top, 8)
-            
-            VStack(spacing: 4) {
-                if isSleepTime {
-                    // Tappable sleep block
-                    SleepBlockView(
-                        hour: hour,
-                        sleepSchedule: sleepSchedule
-                    )
-                    .frame(height: baseHourHeight)
-                    .onTapGesture {
-                        onSleepTap()
-                    }
-                } else if !tasksForThisHour.isEmpty {
-                    // Tappable task blocks
-                    let taskHeight = tasksForThisHour.count > 1 ? 
-                        baseHourHeight * CGFloat(tasksForThisHour.count) : baseHourHeight
+        ScrollView {
+            VStack(spacing: 0) {
+                // Date header
+                VStack(spacing: 8) {
+                    Text("\(Calendar.current.component(.day, from: selectedDate))")
+                        .font(.system(size: 48, weight: .bold))
+                        .foregroundColor(.white)
                     
-                    VStack(spacing: 2) {
-                        ForEach(tasksForThisHour) { task in
-                            TaskBlockView(
-                                task: task,
-                                hour: hour
-                            )
-                            .onTapGesture {
-                                selectedTask = task
-                                showingTaskEditor = true
-                            }
-                        }
+                    Text(selectedDate, format: .dateTime.weekday(.abbreviated))
+                        .font(.title2)
+                        .foregroundColor(.gray)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 30)
+                .background(Color.black)
+                
+                // Interactive hour blocks
+                ForEach(0..<24, id: \.self) { hour in
+                    InteractiveHourBlock(
+                        hour: hour, 
+                        date: selectedDate,
+                        sleepStore: sleepStore
+                    ) { task in
+                        selectedTask = task
+                        showingTaskEditor = true
+                    } onSleepTap: {
+                        showingSleepEditor = true
                     }
-                    .frame(height: taskHeight)
-                } else {
-                    // Empty slot with long press to create
-                    Rectangle()
-                        .fill(Color.clear)
-                        .frame(height: baseHourHeight)
-                        .overlay(
-                            Rectangle()
-                                .stroke(themeManager.secondaryTextColor.opacity(0.15), lineWidth: 0.5)
-                        )
-                        .onLongPressGesture {
-                            onEmptyLongPress()
-                        }
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.vertical, 2)
+        .background(Color.black)
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button(action: { dismiss() }) {
+                    HStack {
+                        Image(systemName: "chevron.left")
+                        Text("Calendar")
+                    }
+                    .foregroundColor(.blue)
+                }
+            }
+        }
         .sheet(isPresented: $showingTaskEditor) {
-            // FIXED: Use the same NativeSchedulerSheet that works in TasksView
             if let task = selectedTask {
                 NativeSchedulerSheet(task: task)
                     .presentationDetents([.height(400)])
@@ -188,388 +113,297 @@ struct TimelineHourView: View {
                     .presentationBackground(.regularMaterial)
             }
         }
+        .sheet(isPresented: $showingSleepEditor) {
+            SimpleSleepEditor(date: selectedDate, sleepStore: sleepStore)
+                .presentationDetents([.height(240)])
+                .presentationDragIndicator(.visible)
+        }
     }
 }
 
-struct CompactSleepEditor: View {
-    let selectedDate: Date
+struct InteractiveHourBlock: View {
+    let hour: Int
+    let date: Date
+    @ObservedObject var sleepStore: SleepScheduleStore
+    let onTaskTap: (TaskItem) -> Void
+    let onSleepTap: () -> Void
     @EnvironmentObject private var taskManager: TaskManager
     @EnvironmentObject private var themeManager: ThemeManager
+    
+    var body: some View {
+        HStack(alignment: .top, spacing: 0) {
+            // Hour label
+            Text(String(format: "%02d:00", hour))
+                .font(.system(size: 14))
+                .foregroundColor(.gray)
+                .frame(width: 50, alignment: .trailing)
+                .padding(.trailing, 16)
+            
+            // Content area
+            VStack(alignment: .leading, spacing: 0) {
+                Rectangle()
+                    .fill(Color.gray.opacity(0.3))
+                    .frame(height: 0.5)
+                
+                GeometryReader { geometry in
+                    HStack(spacing: 0) {
+                        // Check if this is a sleep hour
+                        if sleepStore.isSleepHour(hour, for: date) {
+                            Button(action: onSleepTap) {
+                                InteractiveSleepBlock(hour: hour, date: date, sleepStore: sleepStore)
+                                    .frame(width: geometry.size.width - 16)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                        } else {
+                            let tasks = getTasksForHour(hour)
+                            if !tasks.isEmpty {
+                                let taskWidth = (geometry.size.width - 16) / CGFloat(tasks.count)
+                                
+                                HStack(spacing: 0) {
+                                    ForEach(Array(tasks.enumerated()), id: \.offset) { index, task in
+                                        Button(action: { onTaskTap(task) }) {
+                                            InteractiveTaskBlock(task: task)
+                                                .frame(width: taskWidth)
+                                        }
+                                        .buttonStyle(PlainButtonStyle())
+                                    }
+                                }
+                            }
+                        }
+                        
+                        Spacer()
+                    }
+                }
+                .frame(height: 60)
+                .padding(.top, 8)
+            }
+        }
+        .frame(height: 80)
+        .padding(.horizontal)
+    }
+    
+    private func getTasksForHour(_ hour: Int) -> [TaskItem] {
+        let calendar = Calendar.current
+        return taskManager.getTasksForDate(date).filter { task in
+            guard let startTime = task.startTime else { return false }
+            return calendar.component(.hour, from: startTime) == hour
+        }
+    }
+}
+
+struct InteractiveSleepBlock: View {
+    let hour: Int
+    let date: Date
+    @ObservedObject var sleepStore: SleepScheduleStore
+    @EnvironmentObject private var themeManager: ThemeManager
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Image(systemName: "moon.zzz.fill")
+                        .font(.subheadline)
+                        .foregroundColor(.indigo)
+                    
+                    Text("Sleep")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundColor(.indigo)
+                    
+                    Spacer()
+                }
+                
+                if let schedule = sleepStore.get(for: date), hour == schedule.sleepHour {
+                    let duration = calculateDuration(from: schedule.sleepHour, to: schedule.wakeHour)
+                    Text("\(duration, specifier: "%.1f")h (\(String(format: "%02d", schedule.sleepHour))-\(String(format: "%02d", schedule.wakeHour))) • tap to edit")
+                        .font(.caption2)
+                        .foregroundColor(.indigo.opacity(0.8))
+                } else if hour == 22 && sleepStore.get(for: date) == nil {
+                    Text("8h (22-06) • tap to edit")
+                        .font(.caption2)
+                        .foregroundColor(.indigo.opacity(0.8))
+                } else {
+                    Text("tap to edit")
+                        .font(.caption2)
+                        .foregroundColor(.indigo.opacity(0.8))
+                }
+            }
+            
+            Rectangle()
+                .fill(.indigo)
+                .frame(width: 4)
+                .cornerRadius(2)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(themeManager.cardBackgroundColor.opacity(0.3))
+        .cornerRadius(12)
+        .frame(height: 50)
+    }
+    
+    private func calculateDuration(from sleepHour: Int, to wakeHour: Int) -> Double {
+        if sleepHour > wakeHour {
+            return Double(24 - sleepHour + wakeHour)
+        } else {
+            return Double(wakeHour - sleepHour)
+        }
+    }
+}
+
+struct InteractiveTaskBlock: View {
+    let task: TaskItem
+    @EnvironmentObject private var themeManager: ThemeManager
+    
+    var body: some View {
+        HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(task.title)
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundColor(themeManager.primaryTextColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                
+                if !task.notes.isEmpty {
+                    Text(task.notes)
+                        .font(.caption2)
+                        .foregroundColor(themeManager.secondaryTextColor)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                }
+                
+                if task.isCompleted {
+                    Text("Completed")
+                        .font(.caption2)
+                        .foregroundColor(.green)
+                }
+            }
+            
+            Spacer(minLength: 0)
+            
+            Rectangle()
+                .fill(task.displayColor)
+                .frame(width: 3)
+                .cornerRadius(1.5)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 6)
+        .background(task.isCompleted ? themeManager.cardBackgroundColor.opacity(0.7) : themeManager.cardBackgroundColor)
+        .cornerRadius(8)
+        .frame(height: 50)
+        .opacity(task.isCompleted ? 0.8 : 1.0)
+    }
+}
+
+struct SimpleSleepEditor: View {
+    let date: Date
+    @ObservedObject var sleepStore: SleepScheduleStore
     @Environment(\.dismiss) private var dismiss
     
     @State private var sleepTime = Date()
     @State private var wakeTime = Date()
-    @State private var duration: Double = 8.0
-    @State private var editingMode: EditMode = .sleepTime
-    
-    enum EditMode {
-        case sleepTime, wakeTime, duration
-    }
+    @State private var selectedDuration: Double = 8.0
     
     var body: some View {
-        VStack(spacing: 20) {
-            // Header
+        VStack(spacing: 16) {
             HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Sleep Schedule")
-                        .font(.headline)
-                        .foregroundColor(themeManager.primaryTextColor)
-                    
-                    Text(selectedDate, format: .dateTime.weekday(.wide).month().day())
-                        .font(.caption)
-                        .foregroundColor(themeManager.secondaryTextColor)
-                }
+                Button("Cancel") { dismiss() }
+                    .foregroundColor(.blue)
                 
                 Spacer()
                 
-                Button("Done") {
+                Text("Sleep")
+                    .font(.headline)
+                    .fontWeight(.semibold)
+                
+                Spacer()
+                
+                Button("Save") {
                     saveSleepSchedule()
                 }
                 .foregroundColor(.blue)
                 .fontWeight(.semibold)
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 20)
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
             
-            // Sleep controls with green theme
-            VStack(spacing: 16) {
-                // Sleep time
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Sleep Time")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(.green)
+            HStack(spacing: 24) {
+                VStack(spacing: 4) {
+                    Text("Sleep")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                     
                     DatePicker("", selection: $sleepTime, displayedComponents: .hourAndMinute)
                         .datePickerStyle(.compact)
                         .labelsHidden()
-                        .onChange(of: sleepTime) { _, newValue in
-                            if editingMode == .sleepTime {
-                                updateWakeTimeFromSleep()
-                            }
+                        .scaleEffect(0.9)
+                        .onChange(of: sleepTime) { _, _ in
+                            updateDuration()
                         }
                 }
-                .onTapGesture {
-                    editingMode = .sleepTime
-                }
                 
-                // Wake time
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Wake Time")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(.green)
+                Text("→")
+                    .foregroundColor(.secondary)
+                
+                VStack(spacing: 4) {
+                    Text("Wake")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                     
                     DatePicker("", selection: $wakeTime, displayedComponents: .hourAndMinute)
                         .datePickerStyle(.compact)
                         .labelsHidden()
-                        .onChange(of: wakeTime) { _, newValue in
-                            if editingMode == .wakeTime {
-                                updateDurationFromTimes()
-                            }
+                        .scaleEffect(0.9)
+                        .onChange(of: wakeTime) { _, _ in
+                            updateDuration()
                         }
                 }
-                .onTapGesture {
-                    editingMode = .wakeTime
-                }
-                
-                // Duration slider
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Duration: \(String(format: "%.1f", duration)) hours")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(.green)
-                    
-                    Slider(value: $duration, in: 4.0...12.0, step: 0.5)
-                        .accentColor(.green)
-                        .onChange(of: duration) { _, newValue in
-                            if editingMode == .duration {
-                                updateWakeTimeFromDuration()
-                            }
-                        }
-                        .onTapGesture {
-                            editingMode = .duration
-                        }
-                }
-                
-                // Summary
-                VStack(spacing: 8) {
-                    Text("Sleep Schedule")
-                        .font(.caption)
-                        .foregroundColor(themeManager.secondaryTextColor)
-                    
-                    Text("\(sleepTime, format: .dateTime.hour().minute()) - \(wakeTime, format: .dateTime.hour().minute())")
-                        .font(.title2)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.green)
-                }
-                .padding(.vertical, 12)
-                .frame(maxWidth: .infinity)
-                .background(.green.opacity(0.1))
-                .cornerRadius(12)
             }
-            .padding(.horizontal, 20)
             
-            Spacer()
+            Text("\(selectedDuration, specifier: "%.1f")h")
+                .font(.title2)
+                .fontWeight(.medium)
+                .foregroundColor(.blue)
+            
+            Text(date, format: .dateTime.month().day())
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.bottom, 12)
         }
-        .background(themeManager.backgroundColor)
         .onAppear {
-            loadCurrentSleepSchedule()
+            loadCurrentSchedule()
         }
     }
     
-    private func loadCurrentSleepSchedule() {
-        if let sleep = taskManager.getSleepScheduleForSpecificDate(selectedDate) {
-            sleepTime = sleep.startTime
-            wakeTime = sleep.endTime
-            duration = sleep.duration / 3600
+    private func loadCurrentSchedule() {
+        let calendar = Calendar.current
+        
+        if let schedule = sleepStore.get(for: date) {
+            sleepTime = calendar.date(bySettingHour: schedule.sleepHour, minute: 0, second: 0, of: date) ?? Date()
+            wakeTime = calendar.date(bySettingHour: schedule.wakeHour, minute: 0, second: 0, of: date.addingTimeInterval(24*3600)) ?? Date()
         } else {
-            let calendar = Calendar.current
-            sleepTime = calendar.date(bySettingHour: 22, minute: 0, second: 0, of: selectedDate) ?? Date()
-            wakeTime = calendar.date(bySettingHour: 6, minute: 0, second: 0, of: selectedDate.addingTimeInterval(24*3600)) ?? Date()
-            duration = 8.0
+            sleepTime = calendar.date(bySettingHour: 22, minute: 0, second: 0, of: date) ?? Date()
+            wakeTime = calendar.date(bySettingHour: 6, minute: 0, second: 0, of: date.addingTimeInterval(24*3600)) ?? Date()
         }
+        
+        updateDuration()
     }
     
-    private func updateWakeTimeFromSleep() {
-        wakeTime = sleepTime.addingTimeInterval(duration * 3600)
-    }
-    
-    private func updateWakeTimeFromDuration() {
-        wakeTime = sleepTime.addingTimeInterval(duration * 3600)
-    }
-    
-    private func updateDurationFromTimes() {
-        let timeDiff = wakeTime.timeIntervalSince(sleepTime)
-        duration = timeDiff > 0 ? timeDiff / 3600 : (timeDiff + 24*3600) / 3600
+    private func updateDuration() {
+        var duration = wakeTime.timeIntervalSince(sleepTime)
+        if duration < 0 {
+            duration += 24 * 3600
+        }
+        selectedDuration = duration / 3600
     }
     
     private func saveSleepSchedule() {
-        taskManager.updateSleepScheduleForSpecificDate(selectedDate, sleepTime: sleepTime, wakeTime: wakeTime, duration: duration)
+        let calendar = Calendar.current
+        let sleepHour = calendar.component(.hour, from: sleepTime)
+        let wakeHour = calendar.component(.hour, from: wakeTime)
+        
+        sleepStore.save(for: date, sleepHour: sleepHour, wakeHour: wakeHour)
         dismiss()
-    }
-}
-
-struct TaskCreatorSheet: View {
-    let selectedDate: Date
-    let selectedHour: Int
-    @EnvironmentObject private var taskManager: TaskManager
-    @EnvironmentObject private var themeManager: ThemeManager
-    @Environment(\.dismiss) private var dismiss
-    
-    @State private var taskTitle = ""
-    @State private var taskNotes = ""
-    @State private var selectedTime = Date()
-    @State private var duration: Double = 60
-    
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Task Details") {
-                    TextField("Task Title", text: $taskTitle)
-                    TextField("Notes (optional)", text: $taskNotes, axis: .vertical)
-                        .lineLimit(3)
-                }
-                
-                Section("Schedule") {
-                    DatePicker("Start Time", selection: $selectedTime, displayedComponents: .hourAndMinute)
-                    
-                    Picker("Duration", selection: $duration) {
-                        Text("15 min").tag(15.0)
-                        Text("30 min").tag(30.0)
-                        Text("1 hour").tag(60.0)
-                        Text("1.5 hours").tag(90.0)
-                        Text("2 hours").tag(120.0)
-                        Text("3 hours").tag(180.0)
-                    }
-                }
-                
-                Section {
-                    let endTime = selectedTime.addingTimeInterval(duration * 60)
-                    HStack {
-                        Text("Scheduled Time")
-                        Spacer()
-                        Text("\(selectedTime, format: .dateTime.hour().minute()) - \(endTime, format: .dateTime.hour().minute())")
-                            .foregroundColor(.blue)
-                            .fontWeight(.medium)
-                    }
-                }
-            }
-            .navigationTitle("Create Task")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { dismiss() }
-                }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Create") {
-                        createTask()
-                    }
-                    .fontWeight(.semibold)
-                    .disabled(taskTitle.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
-            }
-        }
-        .onAppear {
-            setupDefaultTime()
-        }
-    }
-    
-    private func setupDefaultTime() {
-        let calendar = Calendar.current
-        selectedTime = calendar.date(bySettingHour: selectedHour, minute: 0, second: 0, of: selectedDate) ?? Date()
-    }
-    
-    private func createTask() {
-        let calendar = Calendar.current
-        let dateComponents = calendar.dateComponents([.year, .month, .day], from: selectedDate)
-        let timeComponents = calendar.dateComponents([.hour, .minute], from: selectedTime)
-        
-        var combinedComponents = DateComponents()
-        combinedComponents.year = dateComponents.year
-        combinedComponents.month = dateComponents.month
-        combinedComponents.day = dateComponents.day
-        combinedComponents.hour = timeComponents.hour
-        combinedComponents.minute = timeComponents.minute
-        
-        guard let startTime = calendar.date(from: combinedComponents) else { return }
-        let endTime = startTime.addingTimeInterval(duration * 60)
-        
-        taskManager.addTask(
-            title: taskTitle.trimmingCharacters(in: .whitespaces),
-            notes: taskNotes.trimmingCharacters(in: .whitespaces),
-            scheduledDate: selectedDate,
-            startTime: startTime,
-            endTime: endTime,
-            taskType: .personal
-        )
-        
-        dismiss()
-    }
-}
-
-struct TaskBlockView: View {
-    let task: TaskItem
-    let hour: Int
-    @EnvironmentObject private var themeManager: ThemeManager
-    
-    private var isStartingHour: Bool {
-        guard let startTime = task.startTime else { return false }
-        return Calendar.current.component(.hour, from: startTime) == hour
-    }
-    
-    var body: some View {
-        HStack(spacing: 12) {
-            Rectangle()
-                .fill(task.displayColor)
-                .frame(width: 4)
-                .cornerRadius(2)
-            
-            VStack(alignment: .leading, spacing: 4) {
-                if isStartingHour {
-                    Text(task.title)
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(themeManager.primaryTextColor)
-                        .lineLimit(2)
-                    
-                    if !task.notes.isEmpty {
-                        Text(task.notes)
-                            .font(.caption)
-                            .foregroundColor(themeManager.secondaryTextColor)
-                            .lineLimit(1)
-                    }
-                    
-                    if let start = task.startTime, let end = task.endTime {
-                        Text("\(start, format: .dateTime.hour().minute()) - \(end, format: .dateTime.hour().minute())")
-                            .font(.caption2)
-                            .foregroundColor(.blue)
-                    }
-                } else {
-                    HStack {
-                        Rectangle()
-                            .fill(task.displayColor.opacity(0.3))
-                            .frame(height: 2)
-                            .cornerRadius(1)
-                        
-                        Text(task.title)
-                            .font(.caption)
-                            .foregroundColor(themeManager.secondaryTextColor)
-                            .lineLimit(1)
-                    }
-                }
-            }
-            
-            Spacer()
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, isStartingHour ? 12 : 6)
-        .background(themeManager.cardBackgroundColor)
-        .cornerRadius(8)
-    }
-}
-
-struct SleepBlockView: View {
-    let hour: Int
-    let sleepSchedule: SleepScheduleItem?
-    @EnvironmentObject private var themeManager: ThemeManager
-    
-    private var isSleepStartHour: Bool {
-        guard let sleep = sleepSchedule else { return false }
-        let calendar = Calendar.current
-        let startHour = calendar.component(.hour, from: sleep.startTime)
-        return hour == startHour
-    }
-    
-    var body: some View {
-        HStack(spacing: 12) {
-            Rectangle()
-                .fill(Color.green.opacity(0.8))
-                .frame(width: 4)
-                .cornerRadius(2)
-            
-            if isSleepStartHour {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Image(systemName: "moon.zzz.fill")
-                            .foregroundColor(Color.green)
-                            .font(.caption)
-                        
-                        Text("Sleep")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                            .foregroundColor(themeManager.primaryTextColor)
-                    }
-                    
-                    if let sleep = sleepSchedule {
-                        Text("\(sleep.startTime, format: .dateTime.hour().minute()) - \(sleep.endTime, format: .dateTime.hour().minute())")
-                            .font(.caption2)
-                            .foregroundColor(themeManager.secondaryTextColor)
-                        
-                        let hours = sleep.duration / 3600
-                        Text("\(String(format: "%.1f", hours)) hours")
-                            .font(.caption2)
-                            .foregroundColor(themeManager.secondaryTextColor)
-                    }
-                }
-            } else {
-                HStack {
-                    Rectangle()
-                        .fill(Color.green.opacity(0.3))
-                        .frame(height: 2)
-                        .cornerRadius(1)
-                    
-                    Spacer()
-                }
-            }
-            
-            Spacer()
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, isSleepStartHour ? 12 : 6)
-        .background(Color.green.opacity(0.05))
-        .cornerRadius(8)
     }
 }
 
@@ -577,5 +411,4 @@ struct SleepBlockView: View {
     DailyTimelineView(selectedDate: Date())
         .environmentObject(TaskManager(context: ModelContext(ModelContainer.preview)))
         .environmentObject(ThemeManager())
-        .modelContainer(ModelContainer.preview)
 }
