@@ -2,7 +2,7 @@
 //  ContentView.swift
 //  TimeBoxApp
 //
-//  Fixed TaskManager context issue
+//  Simplified: Tasks only, no calendar
 //
 
 import SwiftUI
@@ -13,21 +13,9 @@ struct ContentView: View {
     @StateObject private var themeManager = ThemeManager()
     
     var body: some View {
-        TabView {
-            TasksView()
-                .tabItem {
-                    Image(systemName: "checkmark.circle")
-                    Text("Tasks")
-                }
-            
-            CalendarView()
-                .tabItem {
-                    Image(systemName: "calendar")
-                    Text("Calendar")
-                }
-        }
-        .environmentObject(TaskManager(context: context))
-        .environmentObject(themeManager)
+        TasksView()
+            .environmentObject(TaskManager(context: context))
+            .environmentObject(themeManager)
     }
 }
 

@@ -166,21 +166,5 @@ class TaskManager: ObservableObject {
             errorMessage = "Failed to calculate progress: \(error.localizedDescription)"
             return (completed: 0, total: 0, percentage: 0.0)
         }
-            return (completed: 0, total: 0, percentage: 0.0)
-        }
-    }
-    
-    // MARK: - Advanced Task Creation
-    func createScheduledTask(title: String, scheduledDate: Date, startTime: Date, endTime: Date, taskType: TaskType = .personal) {
-        let task = TaskItem(
-            title: title,
-            scheduledDate: scheduledDate,
-            startTime: startTime,
-            endTime: endTime,
-            taskType: taskType
-        )
-        
-        modelContext.insert(task)
-        saveContext()
     }
 }

@@ -78,42 +78,34 @@ struct TasksView: View {
                     
                     // Bottom input with smart time parsing
                     VStack(spacing: 0) {
-                        // Show parsed time chip - MORE PROMINENT
+                        // Show parsed time chips if detected
                         if let parsed = parsedTime {
-                            HStack(spacing: 12) {
-                                Image(systemName: "clock.fill")
-                                    .font(.body)
-                                    .foregroundColor(.white)
+                            HStack(spacing: 8) {
+                                Image(systemName: "clock")
+                                    .font(.caption)
+                                    .foregroundColor(.blue)
                                 
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(parsed.scheduledDate, format: .dateTime.hour().minute())
-                                        .font(.subheadline)
-                                        .fontWeight(.semibold)
-                                        .foregroundColor(.white)
-                                    
-                                    if !Calendar.current.isDateInToday(parsed.scheduledDate) {
-                                        Text(parsed.scheduledDate, format: .dateTime.month().day())
-                                            .font(.caption2)
-                                            .foregroundColor(.white.opacity(0.8))
-                                    }
+                                Text(parsed.scheduledDate, format: .dateTime.hour().minute())
+                                    .font(.caption)
+                                    .foregroundColor(.blue)
+                                
+                                if !Calendar.current.isDateInToday(parsed.scheduledDate) {
+                                    Text(parsed.scheduledDate, format: .dateTime.month().day())
+                                        .font(.caption)
+                                        .foregroundColor(.blue)
                                 }
                                 
                                 Spacer()
                                 
                                 Button(action: { parsedTime = nil }) {
                                     Image(systemName: "xmark.circle.fill")
-                                        .font(.body)
-                                        .foregroundColor(.white.opacity(0.7))
+                                        .font(.caption)
+                                        .foregroundColor(.gray)
                                 }
                             }
                             .padding(.horizontal, 16)
-                            .padding(.vertical, 12)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .fill(Color.blue)
-                            )
-                            .padding(.horizontal, 16)
-                            .padding(.top, 8)
+                            .padding(.vertical, 8)
+                            .background(Color.blue.opacity(0.1))
                         }
                         
                         Divider()
@@ -177,39 +169,27 @@ struct TasksView: View {
     }
     
     private func addTask() {
+        let cleanTitle = newTaskTitle.trimmingCharacters(in: .whitespaces)
+        guard !cleanTitle.isEmpty else { return }
+        
         if let parsed = parsedTime {
-            let calendar = Calendar.current
-            
-            var startComponents = calendar.dateComponents([.year, .month, .day], from: parsed.scheduledDate)
-            startComponents.hour = calendar.component(.hour, from: parsed.scheduledDate)
-            startComponents.minute = calendar.component(.minute, from: parsed.scheduledDate)
-            
-            guard let startTime = calendar.date(from: startComponents) else { return }
-            let endTime = startTime.addingTimeInterval(3600)
-            
-            taskManager.createScheduledTask(
+            // Create task with parsed time
+            taskManager.addTask(
                 title: parsed.cleanedTitle,
-                scheduledDate: parsed.scheduledDate,
-                startTime: startTime,
-                endTime: endTime,
-                taskType: .personal
+                taskType: .personal,
+                scheduledDate: parsed.scheduledDate
             )
-            
             parsedTime = nil
-            newTaskTitle = ""
-            isInputFocused = true
         } else {
-            let cleanTitle = newTaskTitle.trimmingCharacters(in: .whitespaces)
-            guard !cleanTitle.isEmpty else { return }
-            
+            // Create task without specific time
             taskManager.addTask(
                 title: cleanTitle,
                 taskType: .personal
             )
-            
-            newTaskTitle = ""
-            isInputFocused = true
         }
+        
+        newTaskTitle = ""
+        isInputFocused = true
     }
     
     private func createTaskFromTemplate(_ template: TaskTemplate) {
